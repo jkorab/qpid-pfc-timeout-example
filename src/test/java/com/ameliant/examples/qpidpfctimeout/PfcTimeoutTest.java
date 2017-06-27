@@ -30,7 +30,7 @@ public class PfcTimeoutTest {
     public static final String BROKER_URL = String.format("failover:(amqp://localhost:%d?" +
             "amqp.idleTimeout=25000&amqp.maxFrameSize=1048576)" +
             "?jms.connectTimeout=15000" +
-            //"&jms.sendTimeout=15000" +
+            "&jms.sendTimeout=15000" +
             //"&jms.prefetchPolicy=1000" +
             //"&jms.maxRedeliveries=-1" +
             //"&jms.localMessageExpiry=true" +
@@ -52,7 +52,7 @@ public class PfcTimeoutTest {
 
     @Rule
     public EmbeddedBroker broker = new EmbeddedBroker( 2* PAYLOAD_SIZE,
-            30_000);
+            10_000);
 
     @Test
     public void testTimeoutBehaviour() {
@@ -118,7 +118,8 @@ public class PfcTimeoutTest {
                             producer.send(message);
                             fail("Send completed without producer flow control");
                         } catch (JMSException ex) {
-                            log.info("Detected producer flow control on send - timed out on broker side");
+                            // qpid: "Timed out waiting for disposition of sent Message"
+                            log.info("Detected producer flow control on send: {}", ex);
                         }
                     } else {
                         fail("Latch wait time elapsed before message expired from queue");
