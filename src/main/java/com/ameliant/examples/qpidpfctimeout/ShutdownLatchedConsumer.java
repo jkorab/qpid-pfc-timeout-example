@@ -38,9 +38,9 @@ abstract class ShutdownLatchedConsumer implements Runnable {
             try (MessageConsumer consumer = session.createConsumer(destination)) {
                 consumer.setMessageListener(listener);
                 shutdownLatch.await();
-                log.info("Shutting down");
+                log.info("Consumer shutting down");
             } catch (InterruptedException e) {
-                log.warn("Latch interrupted, shutting down");
+                log.warn("Latch interrupted, consumer shutting down");
             }
         } catch (JMSException ex) {
             log.error("Caught JMSException", ex);

@@ -1,6 +1,8 @@
 package com.ameliant.examples.qpidpfctimeout;
 
 import com.ameliant.examples.qpidpfctimeout.embedded.EmbeddedBroker;
+import org.apache.activemq.broker.jmx.QueueView;
+import org.apache.activemq.broker.jmx.QueueViewMBean;
 import org.apache.qpid.jms.JmsConnectionFactory;
 import org.junit.Rule;
 import org.junit.Test;
@@ -8,7 +10,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.jms.*;
+import javax.management.remote.JMXConnector;
+import javax.management.remote.JMXConnectorFactory;
 
+import java.lang.management.ManagementFactory;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
@@ -40,11 +45,14 @@ public class PfcTimeoutTest {
             "&failover.maxReconnectAttempts=-1" +
             "&failover.startupMaxReconnectAttempts=-1" +
             "&failover.warnAfterReconnectAttempts=10", EmbeddedBroker.AMQP_PORT);
+    public static final String FOO = "foo";
+    public static final int PAYLOAD_SIZE = 1_000_000;
 
     private Logger log = LoggerFactory.getLogger(this.getClass());
 
     @Rule
-    public EmbeddedBroker broker = new EmbeddedBroker();
+    public EmbeddedBroker broker = new EmbeddedBroker( 2* PAYLOAD_SIZE,
+            30_000);
 
     @Test
     public void testTimeoutBehaviour() {
@@ -58,6 +66,9 @@ public class PfcTimeoutTest {
 
         ConnectionFactory connectionFactory = new JmsConnectionFactory(BROKER_URL);
         try (Connection connection = connectionFactory.createConnection()) {
+            connection.setExceptionListener(ex ->
+                log.info("Caught exception on connection: {}", ex)
+            );
             connection.start();
 
             {
@@ -65,29 +76,50 @@ public class PfcTimeoutTest {
                 Executor executor = Executors.newFixedThreadPool(2);
                 executor.execute(new TtlExpirationConsumer(connection, shutdownLatch, messageExpiredLatch));
 
-                // messages can only be TTLed when there is a consumer - subscribe, and then shutdown
+                // messages can only be TTLed when there is a consumer - subscribe, and then immediately shutdown
                 CountDownLatch consumerShutdownLatch = new CountDownLatch(1);
-                executor.execute(new CountingConsumer(connection, consumerShutdownLatch, "foo"));
+                executor.execute(new CountingConsumer(connection, consumerShutdownLatch, FOO));
                 consumerShutdownLatch.countDown();
-                // TODO the paging for TTL doesn't seem to be happening - confirm via standalone broker
             }
 
             try (Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)) {
-                Queue foo = session.createQueue("foo");
+                Queue foo = session.createQueue(FOO);
                 try (MessageProducer producer = session.createProducer(foo)) {
-                    byte[] bytes = new PayloadGenerator().generatePayload(1_000_000);
+                    byte[] bytes = new PayloadGenerator().generatePayload(PAYLOAD_SIZE);
 
                     for (int i = 0; i < 3; i++) {
                         BytesMessage message = session.createBytesMessage();
                         message.writeBytes(bytes);
-                        // expire in one second
-                        message.setJMSExpiration(new Date().getTime() + 1000);
 
-                        producer.send(message);
+                        // expire the first message
+                        long expiry = (i == 0) ? 1000 : Message.DEFAULT_TIME_TO_LIVE;
+                        log.debug("Setting message expiry for message[" + i + "] to " + expiry);
+                        producer.send(message, DeliveryMode.PERSISTENT, Message.DEFAULT_PRIORITY, expiry);
+                        log.info("Sent message[{}]", i);
                     }
+                    log.info("Pre-load phase messages sent");
 
+                    log.info("Waiting until a message expires");
                     if (messageExpiredLatch.await(60, TimeUnit.SECONDS)) {
-                        log.info("Message expired !!!");
+                        log.info("Message expired - attempting to send");
+
+                        // verify that the memory being used on the queue is >70%
+                        // at this time PFC should be triggered
+                        int memoryPercentUsage = broker.getDestinationView("foo").getMemoryPercentUsage();
+                        assertTrue("Memory used did not exceed 70%, was " + memoryPercentUsage + "%",
+                                memoryPercentUsage > 70);
+                        log.info("Memory for {} shows {}% usage", FOO, memoryPercentUsage);
+
+                        BytesMessage message = session.createBytesMessage();
+                        message.writeBytes(bytes);
+
+                        log.info("Attempting to send a message when PFC is on - producer should block");
+                        try {
+                            producer.send(message);
+                            fail("Send completed without producer flow control");
+                        } catch (JMSException ex) {
+                            log.info("Detected producer flow control on send - timed out on broker side");
+                        }
                     } else {
                         fail("Latch wait time elapsed before message expired from queue");
                     }
