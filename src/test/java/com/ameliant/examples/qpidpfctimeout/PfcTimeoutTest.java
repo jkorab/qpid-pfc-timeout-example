@@ -30,8 +30,8 @@ public class PfcTimeoutTest {
     public static final String BROKER_URL = String.format("failover:(amqp://localhost:%d?" +
             "amqp.idleTimeout=25000&amqp.maxFrameSize=1048576)" +
             "?jms.connectTimeout=15000" +
-            "&jms.sendTimeout=15000" +
-            //"&jms.prefetchPolicy=1000" +
+            "&jms.sendTimeout=15000" + // interrupt on client-side
+            "&jms.prefetchPolicy=1000" +
             //"&jms.maxRedeliveries=-1" +
             //"&jms.localMessageExpiry=true" +
             //"&jms.localMessagePriority=false" +

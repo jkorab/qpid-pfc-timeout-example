@@ -55,6 +55,7 @@ public class EmbeddedBroker extends ExternalResource {
                 {
                     policyEntry.setQueue(">");
                     policyEntry.setMemoryLimit(memoryLimitForQueues);
+                    //policyEntry.setMaxPageSize(1);
                 }
                 policyMap.setDefaultEntry(policyEntry);
             }
