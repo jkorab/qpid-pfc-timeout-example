@@ -21,12 +21,18 @@ public class EmbeddedBroker extends ExternalResource {
 
     private final int memoryLimitForQueues;
     private final int timeoutForSendFailIfNoSpace;
+    private final int maxExpirePageSize;
 
     private BrokerService brokerService;
 
     public EmbeddedBroker(int memoryLimitForQueues, int timeoutForSendFailIfNoSpace) {
+        this(memoryLimitForQueues, timeoutForSendFailIfNoSpace, -1);
+    }
+
+    public EmbeddedBroker(int memoryLimitForQueues, int timeoutForSendFailIfNoSpace, int maxExpirePageSize) {
         this.memoryLimitForQueues = memoryLimitForQueues;
         this.timeoutForSendFailIfNoSpace = timeoutForSendFailIfNoSpace;
+        this.maxExpirePageSize = maxExpirePageSize;
     }
 
     @Override
@@ -55,6 +61,9 @@ public class EmbeddedBroker extends ExternalResource {
                 {
                     policyEntry.setQueue(">");
                     policyEntry.setMemoryLimit(memoryLimitForQueues);
+                    if (maxExpirePageSize > 0) {
+                        policyEntry.setMaxExpirePageSize(maxExpirePageSize);
+                    }
                     //policyEntry.setMaxPageSize(1);
                 }
                 policyMap.setDefaultEntry(policyEntry);

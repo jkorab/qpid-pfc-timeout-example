@@ -1,8 +1,6 @@
 package com.ameliant.examples.qpidpfctimeout;
 
 import com.ameliant.examples.qpidpfctimeout.embedded.EmbeddedBroker;
-import org.apache.activemq.broker.jmx.QueueView;
-import org.apache.activemq.broker.jmx.QueueViewMBean;
 import org.apache.qpid.jms.JmsConnectionFactory;
 import org.junit.Rule;
 import org.junit.Test;
@@ -10,22 +8,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.jms.*;
-import javax.management.remote.JMXConnector;
-import javax.management.remote.JMXConnectorFactory;
-
-import java.lang.management.ManagementFactory;
-import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * @author jkorab
  */
-public class PfcTimeoutTest {
+public class NoPfcDueToExpiryPagingTest {
 
     public static final String BROKER_URL = String.format("failover:(amqp://localhost:%d?" +
             "amqp.idleTimeout=25000&amqp.maxFrameSize=1048576)" +
@@ -47,15 +41,16 @@ public class PfcTimeoutTest {
             "&failover.warnAfterReconnectAttempts=10", EmbeddedBroker.AMQP_PORT);
     public static final String FOO = "foo";
     public static final int PAYLOAD_SIZE = 1_000_000;
+    public static final int MESSAGES_TO_SEND = 3;
 
     private Logger log = LoggerFactory.getLogger(this.getClass());
 
     @Rule
-    public EmbeddedBroker broker = new EmbeddedBroker( 2* PAYLOAD_SIZE,
-            10_000);
+    public EmbeddedBroker broker = new EmbeddedBroker( (2* PAYLOAD_SIZE) + 1,
+            10_000, 1);
 
     @Test
-    public void testTimeoutBehaviour() {
+    public void testNoMessagesExpiredAndNoPfc() {
         CountDownLatch messageExpiredLatch = new CountDownLatch(1);
         CountDownLatch shutdownLatch = new CountDownLatch(1);
 
@@ -87,12 +82,12 @@ public class PfcTimeoutTest {
                 try (MessageProducer producer = session.createProducer(foo)) {
                     byte[] bytes = new PayloadGenerator().generatePayload(PAYLOAD_SIZE);
 
-                    for (int i = 0; i < 3; i++) {
+                    for (int i = 0; i < MESSAGES_TO_SEND; i++) {
                         BytesMessage message = session.createBytesMessage();
                         message.writeBytes(bytes);
 
-                        // expire the first message
-                        long expiry = (i == 0) ? 1000 : Message.DEFAULT_TIME_TO_LIVE;
+                        // expire the LAST message
+                        long expiry = (i == (MESSAGES_TO_SEND - 1)) ? 1000 : Message.DEFAULT_TIME_TO_LIVE;
                         log.debug("Setting message expiry for message[" + i + "] to " + expiry);
                         producer.send(message, DeliveryMode.PERSISTENT, Message.DEFAULT_PRIORITY, expiry);
                         log.info("Sent message[{}]", i);
@@ -101,28 +96,23 @@ public class PfcTimeoutTest {
 
                     log.info("Waiting until a message expires");
                     if (messageExpiredLatch.await(60, TimeUnit.SECONDS)) {
-                        log.info("Message expired - attempting to send");
+                        fail("Expected no message to expire, paging should not happen");
+                    } else {
+                        log.info("No messages expired - attempting to send");
 
-                        // verify that the memory being used on the queue is >70%
-                        // at this time PFC should be triggered
+                        // verify that the memory being used on the queue is <=70%
+                        // no PFC should be triggered here
                         int memoryPercentUsage = broker.getDestinationView("foo").getMemoryPercentUsage();
-                        assertTrue("Memory used did not exceed 70%, was " + memoryPercentUsage + "%",
-                                memoryPercentUsage > 70);
+                        assertTrue("Memory used exceeded 70%, was " + memoryPercentUsage + "%",
+                                memoryPercentUsage < 70);
                         log.info("Memory for {} shows {}% usage", FOO, memoryPercentUsage);
 
                         BytesMessage message = session.createBytesMessage();
                         message.writeBytes(bytes);
 
-                        log.info("Attempting to send a message when PFC is on - producer should block");
-                        try {
-                            producer.send(message);
-                            fail("Send completed without producer flow control");
-                        } catch (JMSException ex) {
-                            // qpid: "Timed out waiting for disposition of sent Message"
-                            log.info("Detected producer flow control on send: {}", ex);
-                        }
-                    } else {
-                        fail("Latch wait time elapsed before message expired from queue");
+                        log.info("Attempting to send a message - producer should not block");
+                        producer.send(message);
+                        log.info("Last message sent OK");
                     }
                 }
             }
